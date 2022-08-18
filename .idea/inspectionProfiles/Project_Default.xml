@@ -1,0 +1,135 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="DuplicatedCode" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <Languages>
+        <language minSize="1344" name="Python" />
+      </Languages>
+    </inspection_tool>
+    <inspection_tool class="HttpUrlsUsage" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredUrls">
+        <list>
+          <option value="http://localhost" />
+          <option value="http://127.0.0.1" />
+          <option value="http://0.0.0.0" />
+          <option value="http://www.w3.org/" />
+          <option value="http://json-schema.org/draft" />
+          <option value="http://java.sun.com/" />
+          <option value="http://xmlns.jcp.org/" />
+          <option value="http://javafx.com/javafx/" />
+          <option value="http://javafx.com/fxml" />
+          <option value="http://maven.apache.org/xsd/" />
+          <option value="http://maven.apache.org/POM/" />
+          <option value="http://www.springframework.org/schema/" />
+          <option value="http://www.springframework.org/tags" />
+          <option value="http://www.springframework.org/security/tags" />
+          <option value="http://www.thymeleaf.org" />
+          <option value="http://www.jboss.org/j2ee/schema/" />
+          <option value="http://www.jboss.com/xml/ns/" />
+          <option value="http://www.ibm.com/webservices/xsd" />
+          <option value="http://activemq.apache.org/schema/" />
+          <option value="http://schema.cloudfoundry.org/spring/" />
+          <option value="http://schemas.xmlsoap.org/" />
+          <option value="http://cxf.apache.org/schemas/" />
+          <option value="http://primefaces.org/ui" />
+          <option value="http://tiles.apache.org/" />
+          <option value="http://publications.europa.eu" />
+          <option value="http://yann.lecun.com" />
+          <option value="http://fashion-mnist.s3-website.eu-central-1.amazonaws.com" />
+          <option value="http://myproduct.somewhere.com" />
+          <option value="http://wikipedia.de" />
+          <option value="http://vision.stanford.edu" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="46">
+            <item index="0" class="java.lang.String" itemvalue="shopify" />
+            <item index="1" class="java.lang.String" itemvalue="launchpad" />
+            <item index="2" class="java.lang.String" itemvalue="absl" />
+            <item index="3" class="java.lang.String" itemvalue="Dijkstar" />
+            <item index="4" class="java.lang.String" itemvalue="wasabi" />
+            <item index="5" class="java.lang.String" itemvalue="threadpoolctl" />
+            <item index="6" class="java.lang.String" itemvalue="huggingface-hub" />
+            <item index="7" class="java.lang.String" itemvalue="nltk" />
+            <item index="8" class="java.lang.String" itemvalue="spacy-loggers" />
+            <item index="9" class="java.lang.String" itemvalue="MarkupSafe" />
+            <item index="10" class="java.lang.String" itemvalue="numpy" />
+            <item index="11" class="java.lang.String" itemvalue="spacy-legacy" />
+            <item index="12" class="java.lang.String" itemvalue="srsly" />
+            <item index="13" class="java.lang.String" itemvalue="torchvision" />
+            <item index="14" class="java.lang.String" itemvalue="Jinja2" />
+            <item index="15" class="java.lang.String" itemvalue="spacy" />
+            <item index="16" class="java.lang.String" itemvalue="XlsxWriter" />
+            <item index="17" class="java.lang.String" itemvalue="filelock" />
+            <item index="18" class="java.lang.String" itemvalue="cupy-cuda113" />
+            <item index="19" class="java.lang.String" itemvalue="blis" />
+            <item index="20" class="java.lang.String" itemvalue="urllib3" />
+            <item index="21" class="java.lang.String" itemvalue="pyparsing" />
+            <item index="22" class="java.lang.String" itemvalue="torchaudio" />
+            <item index="23" class="java.lang.String" itemvalue="spacy-transformers" />
+            <item index="24" class="java.lang.String" itemvalue="tokenizers" />
+            <item index="25" class="java.lang.String" itemvalue="scipy" />
+            <item index="26" class="java.lang.String" itemvalue="transformers" />
+            <item index="27" class="java.lang.String" itemvalue="sacremoses" />
+            <item index="28" class="java.lang.String" itemvalue="typer" />
+            <item index="29" class="java.lang.String" itemvalue="sentence-transformers" />
+            <item index="30" class="java.lang.String" itemvalue="torch" />
+            <item index="31" class="java.lang.String" itemvalue="typing-extensions" />
+            <item index="32" class="java.lang.String" itemvalue="click" />
+            <item index="33" class="java.lang.String" itemvalue="catalogue" />
+            <item index="34" class="java.lang.String" itemvalue="fastrlock" />
+            <item index="35" class="java.lang.String" itemvalue="pandas" />
+            <item index="36" class="java.lang.String" itemvalue="tqdm" />
+            <item index="37" class="java.lang.String" itemvalue="regex" />
+            <item index="38" class="java.lang.String" itemvalue="colorama" />
+            <item index="39" class="java.lang.String" itemvalue="charset-normalizer" />
+            <item index="40" class="java.lang.String" itemvalue="murmurhash" />
+            <item index="41" class="java.lang.String" itemvalue="thinc" />
+            <item index="42" class="java.lang.String" itemvalue="pypandoc" />
+            <item index="43" class="java.lang.String" itemvalue="spacy-alignments" />
+            <item index="44" class="java.lang.String" itemvalue="pytz" />
+            <item index="45" class="java.lang.String" itemvalue="Pillow" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8Inspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="E111" />
+          <option value="E114" />
+          <option value="E127" />
+          <option value="E741" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N812" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="pandas.io.excel._base.ExcelWriter.book" />
+          <option value="torch.utils.data" />
+          <option value="float.cpu" />
+          <option value="word_value.models.TxtFile.query" />
+          <option value="word_value.models.User.query" />
+          <option value="word_value.models.Notification.filter_by" />
+          <option value="word_value.models.Task.query" />
+          <option value="word_value.models.CsvFile.query" />
+          <option value="word_value.models.Experiment.query" />
+          <option value="word_value.models.Experiment.txt_file" />
+          <option value="word_value.models.Experiment.csv_file" />
+          <option value="dm_env._environment.Environment.environment" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

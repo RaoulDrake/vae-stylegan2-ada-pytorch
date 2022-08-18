@@ -11,6 +11,7 @@ import torch
 from torch_utils import training_stats
 from torch_utils import misc
 from torch_utils.ops import conv2d_gradfix
+import dnnlib
 
 #----------------------------------------------------------------------------
 
@@ -129,5 +130,122 @@ class StyleGAN2Loss(Loss):
 
             with torch.autograd.profiler.record_function(name + '_backward'):
                 (real_logits * 0 + loss_Dreal + loss_Dr1).mean().mul(gain).backward()
+
+#----------------------------------------------------------------------------
+
+
+class StyleGAN2VAELoss(StyleGAN2Loss):
+    def __init__(
+        self, device, G_mapping_implicit, G_mapping_explicit, G_synthesis, D, E, vgg16=None,
+        augment_pipe=None, style_mixing_prob=0.9, r1_gamma=10,
+        pl_batch_shrink=2, pl_decay=0.01, pl_weight=2,
+        pixel_loss_weight: float = 0.0, perceptual_loss_weight: float = 1.0,
+        kld_loss_weight: float = 0.0001
+    ):
+        super().__init__(
+            device=device, G_mapping=G_mapping_implicit, G_synthesis=G_synthesis, D=D,
+            augment_pipe=augment_pipe, style_mixing_prob=style_mixing_prob, r1_gamma=r1_gamma,
+            pl_batch_shrink=pl_batch_shrink, pl_decay=pl_decay, pl_weight=pl_weight
+        )
+        self.G_mapping_explicit = G_mapping_explicit
+        self.E = E
+        self.vgg16 = vgg16
+        self.pixel_loss_weight = pixel_loss_weight
+        self.perceptual_loss_weight = perceptual_loss_weight
+        self.kld_loss_weight = kld_loss_weight
+
+    def run_G(self, z, c, sync, implicit=True):
+        mapping = self.G_mapping
+        if not implicit:
+            mapping = self.G_mapping_explicit
+        with misc.ddp_sync(mapping, sync):
+            ws = mapping(z, c)
+            if self.style_mixing_prob > 0 and implicit:
+                with torch.autograd.profiler.record_function('style_mixing'):
+                    cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
+                    cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
+                    ws[:, cutoff:] = mapping(torch.randn_like(z), c, skip_w_avg_update=True)[:, cutoff:]
+        with misc.ddp_sync(self.G_synthesis, sync):
+            img = self.G_synthesis(ws)
+        return img, ws
+
+    def run_E(self, img, c, sync):
+        with misc.ddp_sync(self.E, sync):
+            z, mean, log_var = self.E(img, c)
+        return z, mean, log_var
+
+    def run_vgg16(self, img):
+        # Scale dynamic range from [-1,1] to [0,255].
+        img = (img + 1) * (255 / 2)
+        # Downsample image to 256x256 if it's larger than that. VGG was built for 224x224 images.
+        if img.shape[2] > 256:
+            img = torch.nn.functional.interpolate(img, size=(256, 256), mode='area')
+        features = self.vgg16(img, resize_images=False, return_lpips=True)
+        return features
+
+    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain):
+        do_Emain = (phase in ['Emain', 'Eboth'])
+        do_Gpl = (phase in ['Greg', 'Gboth']) and (self.pl_weight != 0)
+
+        if not do_Emain:
+            super().accumulate_gradients(
+                phase=phase, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain
+            )
+        else:
+            # VAE
+            with torch.autograd.profiler.record_function('Emain_forward'):
+                # Reconstruct
+                real_img_tmp = real_img.detach().requires_grad_(False)
+                z, mean, log_var = self.run_E(real_img_tmp, real_c, sync=sync)
+                recon_img, _recon_ws = self.run_G(z, real_c, implicit=False, sync=(sync and not do_Gpl)) # May get synced by Gpl.
+                # VAE Loss
+                perceptual_loss = 0.0
+                if self.vgg16 is not None:
+                    # Get features
+                    real_features = self.run_vgg16(real_img_tmp)
+                    recon_features = self.run_vgg16(recon_img)
+                    # Perceptual loss
+                    perceptual_loss = (real_features - recon_features).square().sum(1).mean()
+                # Pixel loss
+                pixel_loss = torch.mean((real_img_tmp - recon_img).square())  # , dim=[1, 2, 3])
+                # KLD loss
+                kld_loss = torch.mean(0.5 * torch.sum(torch.exp(log_var) + torch.square(mean) - log_var - 1, dim=1))
+                training_stats.report('Loss/E/pixel_loss', pixel_loss)
+                training_stats.report('Loss/E/pixel_loss_weighted', self.pixel_loss_weight * pixel_loss)
+                training_stats.report('Loss/E/perceptual_loss', perceptual_loss)
+                training_stats.report('Loss/E/perceptual_loss_weighted', self.perceptual_loss_weight * perceptual_loss)
+                training_stats.report('Loss/E/kld_loss', kld_loss)
+                training_stats.report('Loss/E/kld_loss_weighted', self.kld_loss_weight * kld_loss)
+                training_stats.report('Loss/E/kld_loss_weight', self.kld_loss_weight)
+                training_stats.report('Loss/E/loss', (
+                    self.pixel_loss_weight * pixel_loss +
+                    self.perceptual_loss_weight * perceptual_loss +
+                    self.kld_loss_weight * kld_loss
+                ))
+            with torch.autograd.profiler.record_function('Emain_backward'):
+                (
+                    self.pixel_loss_weight * pixel_loss +
+                    self.perceptual_loss_weight * perceptual_loss +
+                    self.kld_loss_weight * kld_loss
+                ).mul(gain).backward()
+
+#----------------------------------------------------------------------------
+
+
+class VAELoss(StyleGAN2VAELoss):
+    def __init__(
+        self, device, G_mapping, G_synthesis, E, vgg16=None,
+        pl_batch_shrink=2, pl_decay=0.01, pl_weight=2,
+        pixel_loss_weight: float = 0.0, perceptual_loss_weight: float = 1.0,
+        kld_loss_weight: float = 0.0001
+    ):
+        super().__init__(
+            device=device,
+            G_mapping_implicit=G_mapping, G_mapping_explicit=G_mapping, G_synthesis=G_synthesis,
+            D=None, E=E, vgg16=vgg16,
+            pl_batch_shrink=pl_batch_shrink, pl_decay=pl_decay, pl_weight=pl_weight,
+            pixel_loss_weight=pixel_loss_weight, perceptual_loss_weight=perceptual_loss_weight,
+            kld_loss_weight=kld_loss_weight
+        )
 
 #----------------------------------------------------------------------------

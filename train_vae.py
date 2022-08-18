@@ -17,7 +17,7 @@ import tempfile
 import torch
 import dnnlib
 
-from training import training_loop
+from training import training_loop_vae as training_loop
 from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
@@ -44,19 +44,17 @@ def setup_training_loop_kwargs(
 
     # Base config.
     cfg        = None, # Base config: 'auto' (default), 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar'
-    gamma      = None, # Override R1 gamma: <float>
     kimg       = None, # Override training duration: <int>
     batch      = None, # Override batch size: <int>
 
-    # Discriminator augmentation.
-    aug        = None, # Augmentation mode: 'ada' (default), 'noaug', 'fixed'
-    p          = None, # Specify p for 'fixed' (required): <float>
-    target     = None, # Override ADA target for 'ada': <float>, default = depends on aug
-    augpipe    = None, # Augmentation pipeline: 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc' (default), ..., 'bgcfnc'
+    # VAE loss config.
+    pixel_loss_weight=None,
+    perceptual_loss_weight=None,
+    kld_loss_weight=None,
 
     # Transfer learning.
     resume     = None, # Load previous network: 'noresume' (default), 'ffhq256', 'ffhq512', 'ffhq1024', 'celebahq256', 'lsundog256', <file>, <url>
-    freezed    = None, # Freeze-D: <int>, default = 0 discriminator layers
+    freezed    = None, # Freeze-D: <int>, default = 0 discriminator layers that are reused as VAE encoder layers
 
     # Performance options (not included in desc).
     fp32       = None, # Disable mixed-precision training: <bool>, default = False
@@ -87,7 +85,7 @@ def setup_training_loop_kwargs(
     args.network_snapshot_ticks = snap
 
     if metrics is None:
-        metrics = ['fid50k_full']
+        metrics = []  # ['fid50k_full']
     assert isinstance(metrics, list)
     if not all(metric_main.is_valid_metric(metric) for metric in metrics):
         raise UserError('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
@@ -152,12 +150,12 @@ def setup_training_loop_kwargs(
     desc += f'-{cfg}'
 
     cfg_specs = {
-        'auto':      dict(ref_gpus=-1, kimg=25000,  mb=-1, mbstd=-1, fmaps=-1,  lrate=-1,     gamma=-1,   ema=-1,  ramp=0.05, map=8),  # EDIT by J.T. # map=2), # Populated dynamically based on resolution and GPU count.
-        'stylegan2': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8), # Uses mixed-precision, unlike the original StyleGAN2.
-        'paper256':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
-        'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025, gamma=0.5,  ema=20,  ramp=None, map=8),
-        'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=2,    ema=10,  ramp=None, map=8),
-        'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025, gamma=0.01, ema=500, ramp=0.05, map=2),
+        'auto':      dict(ref_gpus=-1, kimg=25000,  mb=-1, fmaps=-1,  lrate=-1,     ema=-1,  ramp=0.05, map=8),  # EDIT by J.T. # map=2), # Populated dynamically based on resolution and GPU count.
+        'stylegan2': dict(ref_gpus=8,  kimg=25000,  mb=32, fmaps=1,   lrate=0.002,  ema=10,  ramp=None, map=8), # Uses mixed-precision, unlike the original StyleGAN2.
+        'paper256':  dict(ref_gpus=8,  kimg=25000,  mb=64, fmaps=0.5, lrate=0.0025, ema=20,  ramp=None, map=8),
+        'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, fmaps=1,   lrate=0.0025, ema=20,  ramp=None, map=8),
+        'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, fmaps=1,   lrate=0.002,  ema=10,  ramp=None, map=8),
+        'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, fmaps=1,   lrate=0.0025, ema=500, ramp=0.05, map=2),
     }
 
     assert cfg in cfg_specs
@@ -167,26 +165,35 @@ def setup_training_loop_kwargs(
         spec.ref_gpus = gpus
         res = args.training_set_kwargs.resolution
         spec.mb = max(min(gpus * min(4096 // res, 32), 64), gpus) # keep gpu memory consumption at bay
-        spec.mbstd = min(spec.mb // gpus, 4) # other hyperparams behave more predictably if mbstd group size remains fixed
         spec.fmaps = 1 if res >= 512 else 0.5
         spec.lrate = 0.002 if res >= 1024 else 0.0025
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
 
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
-    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
-    args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
+    args.E_kwargs = dnnlib.EasyDict(class_name='training.networks.VAEEncoder', z_dim=512, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    args.G_kwargs.synthesis_kwargs.channel_base = args.E_kwargs.channel_base = int(spec.fmaps * 32768)
+    args.G_kwargs.synthesis_kwargs.channel_max = args.E_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
-    args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
-    args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
-    args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
-    args.D_kwargs.mapping_kwargs.num_layers = 0  # EDIT by J.T.
-    # args.D_kwargs.mapping_kwargs.lr_multiplier = 0.1  # EDIT by J.T.
+    args.G_kwargs.synthesis_kwargs.num_fp16_res = args.E_kwargs.num_fp16_res = 4 # enable mixed-precision training
+    args.G_kwargs.synthesis_kwargs.conv_clamp = args.E_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    args.E_kwargs.mapping_kwargs.num_layers = 0  # EDIT by J.T.
+    # args.E_kwargs.mapping_kwargs.lr_multiplier = 0.1  # EDIT by J.T.
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
+    args.E_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    # args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=0.001, betas=[0.9,0.999], eps=1e-8)
+    # args.E_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=0.001, betas=[0.9,0.999], eps=1e-8)
+    if pixel_loss_weight is None:
+        pixel_loss_weight = 0.0
+    if perceptual_loss_weight is None:
+        perceptual_loss_weight = 1.0
+    if kld_loss_weight is None:
+        kld_loss_weight = 0.0001
+    args.loss_kwargs = dnnlib.EasyDict(
+        class_name='training.loss.VAELoss', pixel_loss_weight=pixel_loss_weight,
+        perceptual_loss_weight=perceptual_loss_weight, kld_loss_weight=kld_loss_weight
+    )
 
     args.total_kimg = spec.kimg
     args.batch_size = spec.mb
@@ -197,14 +204,7 @@ def setup_training_loop_kwargs(
     if cfg == 'cifar':
         args.loss_kwargs.pl_weight = 0 # disable path length regularization
         args.loss_kwargs.style_mixing_prob = 0 # disable style mixing
-        args.D_kwargs.architecture = 'orig' # disable residual skip connections
-
-    if gamma is not None:
-        assert isinstance(gamma, float)
-        if not gamma >= 0:
-            raise UserError('--gamma must be non-negative')
-        desc += f'-gamma{gamma:g}'
-        args.loss_kwargs.r1_gamma = gamma
+        args.E_kwargs.architecture = 'orig' # disable residual skip connections
 
     if kimg is not None:
         assert isinstance(kimg, int)
@@ -220,73 +220,6 @@ def setup_training_loop_kwargs(
         desc += f'-batch{batch}'
         args.batch_size = batch
         args.batch_gpu = batch // gpus
-
-    # ---------------------------------------------------
-    # Discriminator augmentation: aug, p, target, augpipe
-    # ---------------------------------------------------
-
-    if aug is None:
-        aug = 'ada'
-    else:
-        assert isinstance(aug, str)
-        desc += f'-{aug}'
-
-    if aug == 'ada':
-        args.ada_target = 0.6
-
-    elif aug == 'noaug':
-        pass
-
-    elif aug == 'fixed':
-        if p is None:
-            raise UserError(f'--aug={aug} requires specifying --p')
-
-    else:
-        raise UserError(f'--aug={aug} not supported')
-
-    if p is not None:
-        assert isinstance(p, float)
-        if aug != 'fixed':
-            raise UserError('--p can only be specified with --aug=fixed')
-        if not 0 <= p <= 1:
-            raise UserError('--p must be between 0 and 1')
-        desc += f'-p{p:g}'
-        args.augment_p = p
-
-    if target is not None:
-        assert isinstance(target, float)
-        if aug != 'ada':
-            raise UserError('--target can only be specified with --aug=ada')
-        if not 0 <= target <= 1:
-            raise UserError('--target must be between 0 and 1')
-        desc += f'-target{target:g}'
-        args.ada_target = target
-
-    assert augpipe is None or isinstance(augpipe, str)
-    if augpipe is None:
-        augpipe = 'bgc'
-    else:
-        if aug == 'noaug':
-            raise UserError('--augpipe cannot be specified with --aug=noaug')
-        desc += f'-{augpipe}'
-
-    augpipe_specs = {
-        'blit':   dict(xflip=1, rotate90=1, xint=1),
-        'geom':   dict(scale=1, rotate=1, aniso=1, xfrac=1),
-        'color':  dict(brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1),
-        'filter': dict(imgfilter=1),
-        'noise':  dict(noise=1),
-        'cutout': dict(cutout=1),
-        'bg':     dict(xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1),
-        'bgc':    dict(xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1, brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1),
-        'bgcf':   dict(xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1, brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1, imgfilter=1),
-        'bgcfn':  dict(xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1, brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1, imgfilter=1, noise=1),
-        'bgcfnc': dict(xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1, brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1, imgfilter=1, noise=1, cutout=1),
-    }
-
-    assert augpipe in augpipe_specs
-    if aug != 'noaug':
-        args.augment_kwargs = dnnlib.EasyDict(class_name='training.augment.AugmentPipe', **augpipe_specs[augpipe])
 
     # ----------------------------------
     # Transfer learning: resume, freezed
@@ -313,7 +246,6 @@ def setup_training_loop_kwargs(
         args.resume_pkl = resume # custom path or url
 
     if resume != 'noresume':
-        args.ada_kimg = 100 # make ADA react faster at the beginning
         args.ema_rampup = None # disable EMA rampup
 
     if freezed is not None:
@@ -321,7 +253,7 @@ def setup_training_loop_kwargs(
         if not freezed >= 0:
             raise UserError('--freezed must be non-negative')
         desc += f'-freezed{freezed:d}'
-        args.D_kwargs.block_kwargs.freeze_layers = freezed
+        args.E_kwargs.block_kwargs.freeze_layers = freezed
 
     # -------------------------------------------------
     # Performance options: fp32, nhwc, nobench, workers
@@ -416,15 +348,13 @@ class CommaSeparatedList(click.ParamType):
 
 # Base config.
 @click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar']))
-@click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')
 
-# Discriminator augmentation.
-@click.option('--aug', help='Augmentation mode [default: ada]', type=click.Choice(['noaug', 'ada', 'fixed']))
-@click.option('--p', help='Augmentation probability for --aug=fixed', type=float)
-@click.option('--target', help='ADA target value for --aug=ada', type=float)
-@click.option('--augpipe', help='Augmentation pipeline [default: bgc]', type=click.Choice(['blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc', 'bgcf', 'bgcfn', 'bgcfnc']))
+# VAE loss config.
+@click.option('--pixel-loss-weight', help='Weight for pixel reconstruction loss [default: 0.0]', type=float, metavar='FLOAT')
+@click.option('--perceptual-loss-weight', help='Weight for perceptual feature reconstruction loss [default: 1.0]', type=float, metavar='FLOAT')
+@click.option('--kld-loss-weight', help='Weight for KLD loss [default: 0.0001]', type=float, metavar='FLOAT')
 
 # Transfer learning.
 @click.option('--resume', help='Resume training [default: noresume]', metavar='PKL')
